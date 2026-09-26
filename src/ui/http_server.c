@@ -103,19 +103,23 @@ static bool origin_is_same_server(const char *origin, const char *bound_host, in
 }
 
 static bool origin_matches_host(const char *origin, const char *host, int port) {
-    /* The origin must name the same host as the Host header (any IPv4 form
-     * on a non-loopback bind — fork patch feat/ui-host). */
-    size_t hlen = strlen(host);
+    /* The origin must name the same host as the Host header. On a non-loopback
+     * bind (fork patch feat/ui-host), any host name on our port is accepted by
+     * the Host guard above, so require only that the origin names OUR port. */
     if (strncmp(origin, "http://", 7) != 0) {
         return false;
     }
     const char *origin_host = origin + 7;
+    size_t hlen = strlen(host);
     if (strncmp(origin_host, host, hlen) != 0) {
         return false;
     }
-    char expected[128];
-    int length = snprintf(expected, sizeof(expected), "http://%s:%d", host, port);
-    return length > 0 && (size_t)length < sizeof(expected) && strcmp(origin, expected) == 0;
+    char expected[16];
+    int length = snprintf(expected, sizeof(expected), ":%d", port);
+    if (length <= 0 || strlen(origin_host) < hlen + (size_t)length) {
+        return false;
+    }
+    return strcmp(origin_host + strlen(origin_host) - length, expected) == 0;
 }
 
 /* Foreign origins are rejected before this runs. Reflect only the exact
@@ -1846,13 +1850,19 @@ static bool host_is_loopback_form(const char *host, int port) {
 static bool host_is_this_server(const char *host, const char *bound_host, int port) {
     if (host_is_loopback_form(host, port))
         return true;
-    /* Non-loopback bind: accept the bound address (with or without :port). */
+    /* Non-loopback bind: accept any host that names OUR port. The DNS
+     * rebinding / cross-site vector this guard defends against is a remote
+     * attacker whose browser resolves an external hostname to 127.0.0.1 —
+     * the port is always ours in every legitimate form (LAN IP, mDNS name,
+     * localhost). Accepting only the literal bound IPv4 broke hostname access
+     * (e.g. mac-mini.home:9749) on a trusted LAN behind UniFi + VLANs. */
     if (!cbm_ui_host_is_loopback(bound_host)) {
-        char expected[128];
-        int length = snprintf(expected, sizeof(expected), "%s:%d", bound_host, port);
-        if (length > 0 && (size_t)length < sizeof(expected) && strcmp(host, expected) == 0)
-            return true;
-        return strcmp(host, bound_host) == 0;
+        char expected[16];
+        int length = snprintf(expected, sizeof(expected), ":%d", port);
+        if (length > 0 && (size_t)length < sizeof(expected)) {
+            size_t hlen = strlen(host);
+            return hlen >= (size_t)length && strcmp(host + hlen - length, expected) == 0;
+        }
     }
     return false;
 }
