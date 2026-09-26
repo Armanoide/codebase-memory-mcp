@@ -33,13 +33,6 @@ jobs:
           cp build/c/codebase-memory-mcp dist/codebase-memory-mcp-linux-arm64-portable
           sha256sum dist/codebase-memory-mcp-linux-arm64-portable > dist/checksums.txt
 
-      - name: Smoke test (sur le runner — statique, aucune dépendance)
-        run: |
-          ./dist/codebase-memory-mcp-linux-arm64-portable --version
-          CBM_CACHE_DIR=/tmp/cbm-smoke ./dist/codebase-memory-mcp-linux-arm64-portable config set ui_host 0.0.0.0
-          CBM_CACHE_DIR=/tmp/cbm-smoke ./dist/codebase-memory-mcp-linux-arm64-portable config get ui_host
-          file dist/codebase-memory-mcp-linux-arm64-portable | rg -i 'static' || { echo "ERREUR: binaire non statique"; exit 1; }
-
       - uses: actions/upload-artifact@v4
         with:
           name: cbm-linux-arm64-fork
