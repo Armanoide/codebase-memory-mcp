@@ -449,6 +449,7 @@ bool cbm_config_load_index_policy(cbm_config_t *cfg, cbm_index_resource_policy_t
  * than the key-value store, but surfaced through `config` so it is findable. */
 #define CBM_CONFIG_UI_ENABLED "ui_enabled"
 #define CBM_CONFIG_UI_PORT "ui_port"
+#define CBM_CONFIG_UI_HOST "ui_host" /* fork patch feat/ui-host */
 
 /* Whether the background watcher subsystem should run at all (default true).
  * When false, the daemon host skips building and starting the watcher entirely:

@@ -29,7 +29,13 @@ typedef void (*cbm_http_project_mutation_end_fn)(void *context, const char *proj
 /* Create an HTTP server on the given port.
  * Creates its own cbm_mcp_server_t with a separate read-only SQLite connection.
  * Returns NULL on failure (e.g. port in use). */
-cbm_http_server_t *cbm_http_server_new(int port);
+/* Create the HTTP server bound to <host>:<port>. host NULL/empty defaults
+ * to 127.0.0.1 (loopback). port 0 binds an ephemeral port (tests).
+ * Fork patch feat/ui-host: host may be any valid IPv4 dotted-quad. */
+cbm_http_server_t *cbm_http_server_new(const char *host, int port);
+
+/* The bound address (dotted quad). Fork patch feat/ui-host. */
+const char *cbm_http_server_host(const cbm_http_server_t *srv);
 
 /* Free a quiescent HTTP server. Returns false without freeing if the run loop
  * or an index callback can still access it; callers must fail-stop rather than

@@ -546,7 +546,7 @@ TEST(httpd_deleted_self_spawn_path_follows_platform_ruling) {
 /* ── Transport integration (listener only) ────────────────────── */
 
 TEST(httpd_listen_ephemeral_port) {
-    cbm_httpd_t *d = cbm_httpd_listen(0);
+    cbm_httpd_t *d = cbm_httpd_listen(NULL, 0);
     ASSERT_NOT_NULL(d);
     int port = cbm_httpd_port(d);
     ASSERT_GT(port, 0);
@@ -558,16 +558,16 @@ TEST(httpd_listen_ephemeral_port) {
 }
 
 TEST(httpd_listen_port_collision_returns_null) {
-    cbm_httpd_t *d1 = cbm_httpd_listen(0);
+    cbm_httpd_t *d1 = cbm_httpd_listen(NULL, 0);
     ASSERT_NOT_NULL(d1);
-    cbm_httpd_t *d2 = cbm_httpd_listen(cbm_httpd_port(d1));
+    cbm_httpd_t *d2 = cbm_httpd_listen(NULL, cbm_httpd_port(d1));
     ASSERT_NULL(d2);
     ASSERT_TRUE(cbm_httpd_close(d1));
     PASS();
 }
 
 TEST(httpd_close_refuses_while_connection_owns_listener) {
-    cbm_httpd_t *listener = cbm_httpd_listen(0);
+    cbm_httpd_t *listener = cbm_httpd_listen(NULL, 0);
     ASSERT_NOT_NULL(listener);
     th_sock_t client = th_connect(cbm_httpd_port(listener));
     ASSERT_TRUE(client != TH_SOCK_BAD);
@@ -603,7 +603,7 @@ static int th_server_thread_start(cbm_thread_t *thread, cbm_http_server_t *serve
 }
 
 static int th_server_start(th_server_t *ts) {
-    ts->srv = cbm_http_server_new(0);
+    ts->srv = cbm_http_server_new(NULL, 0);
     if (!ts->srv)
         return -1;
     if (th_server_thread_start(&ts->tid, ts->srv) != 0) {
@@ -614,7 +614,7 @@ static int th_server_start(th_server_t *ts) {
 }
 
 static int th_server_start_with_watcher(th_server_t *ts, cbm_watcher_t *watcher) {
-    ts->srv = cbm_http_server_new(0);
+    ts->srv = cbm_http_server_new(NULL, 0);
     if (!ts->srv)
         return -1;
     cbm_http_server_set_watcher(ts->srv, watcher);
@@ -719,7 +719,7 @@ static void th_ui_mutation_end(void *opaque, const char *project) {
 
 static int th_server_start_with_mutation_guard(th_server_t *ts, cbm_watcher_t *watcher,
                                                th_ui_mutation_guard_t *guard) {
-    ts->srv = cbm_http_server_new(0);
+    ts->srv = cbm_http_server_new(NULL, 0);
     if (!ts->srv)
         return -1;
     if (watcher)
@@ -887,7 +887,7 @@ TEST(ui_server_readiness_proof_is_exact_and_generation_bound) {
     th_server_stop(&without_secret);
 
     th_server_t server = {0};
-    server.srv = cbm_http_server_new(0);
+    server.srv = cbm_http_server_new(NULL, 0);
     ASSERT_NOT_NULL(server.srv);
     cbm_http_server_set_readiness_secret(server.srv, secret);
     ASSERT_EQ(th_server_thread_start(&server.tid, server.srv), 0);
@@ -977,7 +977,7 @@ TEST(ui_server_routes_indexing_through_joinable_daemon_executor) {
     th_ui_index_executor_t executor = {0};
     atomic_init(&executor.calls, 0);
     th_server_t ts;
-    ts.srv = cbm_http_server_new(0);
+    ts.srv = cbm_http_server_new(NULL, 0);
     ASSERT_NOT_NULL(ts.srv);
     cbm_http_server_set_index_executor(ts.srv, th_ui_index_executor, &executor);
     ASSERT_EQ(th_server_thread_start(&ts.tid, ts.srv), 0);
@@ -1012,7 +1012,7 @@ TEST(ui_server_free_never_joins_active_index_worker) {
     atomic_init(&executor.release, 0);
 
     th_server_t ts;
-    ts.srv = cbm_http_server_new(0);
+    ts.srv = cbm_http_server_new(NULL, 0);
     ASSERT_NOT_NULL(ts.srv);
     cbm_http_server_set_index_executor(ts.srv, th_ui_blocking_index_executor, &executor);
     ASSERT_EQ(th_server_thread_start(&ts.tid, ts.srv), 0);
@@ -1703,7 +1703,7 @@ TEST(ui_server_stop_joins_cleanly) {
 }
 
 TEST(ui_server_free_refuses_active_loop) {
-    cbm_http_server_t *server = cbm_http_server_new(0);
+    cbm_http_server_t *server = cbm_http_server_new(NULL, 0);
     ASSERT_NOT_NULL(server);
 
     cbm_thread_t thread;
@@ -1720,7 +1720,7 @@ TEST(ui_server_free_refuses_active_loop) {
 }
 
 TEST(ui_server_free_refuses_scheduled_run_before_child_starts) {
-    cbm_http_server_t *server = cbm_http_server_new(0);
+    cbm_http_server_t *server = cbm_http_server_new(NULL, 0);
     ASSERT_NOT_NULL(server);
 
     ASSERT_TRUE(cbm_http_server_schedule_run(server));
@@ -1785,7 +1785,7 @@ static void *th_httpd_large_reply(void *opaque) {
 }
 
 TEST(httpd_interrupt_unblocks_nonreading_large_response_within_one_second) {
-    cbm_httpd_t *listener = cbm_httpd_listen(0);
+    cbm_httpd_t *listener = cbm_httpd_listen(NULL, 0);
     ASSERT_NOT_NULL(listener);
     cbm_httpd_set_send_buffer_for_test(listener, 64 * 1024);
     /* Deadline pinned far out of reach: the only remaining way the blocked
@@ -1830,7 +1830,7 @@ TEST(httpd_interrupt_unblocks_nonreading_large_response_within_one_second) {
 }
 
 TEST(httpd_nonreading_large_response_hits_send_deadline_without_interrupt) {
-    cbm_httpd_t *listener = cbm_httpd_listen(0);
+    cbm_httpd_t *listener = cbm_httpd_listen(NULL, 0);
     ASSERT_NOT_NULL(listener);
     cbm_httpd_set_send_buffer_for_test(listener, 64 * 1024);
     th_httpd_large_reply_t reply = {.listener = listener};
@@ -2306,7 +2306,7 @@ TEST(ui_server_index_status_long_paths_no_overflow) {
         atomic_init(&executor.calls, 0);
         atomic_init(&executor.release, 0);
         th_server_t ts;
-        ts.srv = cbm_http_server_new(0);
+        ts.srv = cbm_http_server_new(NULL, 0);
         if (!ts.srv) {
             _exit(2);
         }

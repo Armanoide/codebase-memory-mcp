@@ -66,12 +66,16 @@ typedef struct {
 
 /* ── Listener lifecycle ───────────────────────────────────────── */
 
-/* Listen on 127.0.0.1:<port>. port 0 binds an ephemeral port (tests).
- * Returns NULL if the port is unavailable. */
-cbm_httpd_t *cbm_httpd_listen(int port);
+/* Listen on <host>:<port> (IPv4 dotted-quad only — fork patch feat/ui-host).
+ * host NULL defaults to 127.0.0.1. port 0 binds an ephemeral port (tests).
+ * Returns NULL if the host is invalid or the port is unavailable. */
+cbm_httpd_t *cbm_httpd_listen(const char *host, int port);
 
 /* The actually-bound port (differs from the requested one for port 0). */
 int cbm_httpd_port(const cbm_httpd_t *d);
+
+/* The bound address (dotted quad). Fork patch feat/ui-host. */
+const char *cbm_httpd_host(const cbm_httpd_t *d);
 
 /* Override the per-connection receive deadline (tests use short values). */
 void cbm_httpd_set_recv_deadline_ms(cbm_httpd_t *d, int ms);

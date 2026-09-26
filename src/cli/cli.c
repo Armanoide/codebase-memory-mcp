@@ -7447,6 +7447,7 @@ static const config_key_def_t CONFIG_KEYS[] = {
     {CBM_CONFIG_UI_LANG, "auto", "Pin graph UI language: en, zh, or auto"},
     {CBM_CONFIG_UI_ENABLED, "false", "Serve the graph UI on a loopback HTTP port"},
     {CBM_CONFIG_UI_PORT, "9749", "Port for the graph UI listener when enabled"},
+    {CBM_CONFIG_UI_HOST, "127.0.0.1", "Bind address for the graph UI (IPv4; 0.0.0.0 = all interfaces)"},
     {CBM_INDEX_CONFIG_MAX_FILES, "off", "Max accepted source files per index, or off"},
     {CBM_INDEX_CONFIG_MAX_SOURCE_MB, "off", "Max accepted source MiB per index, or off"},
 };
@@ -7471,7 +7472,8 @@ const char *cbm_cli_config_key_at_for_testing(size_t index) {
 #endif
 
 static bool config_key_is_ui(const char *key) {
-    return key && (strcmp(key, CBM_CONFIG_UI_ENABLED) == 0 || strcmp(key, CBM_CONFIG_UI_PORT) == 0);
+    return key && (strcmp(key, CBM_CONFIG_UI_ENABLED) == 0 || strcmp(key, CBM_CONFIG_UI_PORT) == 0 ||
+                   strcmp(key, CBM_CONFIG_UI_HOST) == 0);
 }
 
 static bool config_key_is_index_policy(const char *key) {
@@ -7504,6 +7506,8 @@ static void config_ui_read(const char *key, char *out, size_t out_sz) {
     cbm_ui_config_load(&ui);
     if (strcmp(key, CBM_CONFIG_UI_ENABLED) == 0) {
         snprintf(out, out_sz, "%s", ui.ui_enabled ? "true" : "false");
+    } else if (strcmp(key, CBM_CONFIG_UI_HOST) == 0) {
+        snprintf(out, out_sz, "%s", ui.ui_host);
     } else {
         snprintf(out, out_sz, "%d", ui.ui_port);
     }
@@ -7518,6 +7522,13 @@ static int config_ui_write(const char *key, const char *value) {
             return CLI_ERR;
         }
         ui.ui_enabled = strcmp(value, "true") == 0;
+    } else if (strcmp(key, CBM_CONFIG_UI_HOST) == 0) {
+        if (!cbm_ui_host_is_valid(value)) {
+            (void)fprintf(stderr, "error: %s must be an IPv4 address (e.g. 127.0.0.1, 0.0.0.0)\n",
+                          key);
+            return CLI_ERR;
+        }
+        snprintf(ui.ui_host, sizeof(ui.ui_host), "%s", value);
     } else {
         char *end = NULL;
         long port = strtol(value, &end, 10);

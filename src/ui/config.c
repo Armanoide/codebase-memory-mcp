@@ -30,6 +30,23 @@
 #include <unistd.h>
 #endif
 
+#include <arpa/inet.h> /* inet_pton — fork patch feat/ui-host */
+
+/* ── Host validation (fork patch feat/ui-host) ───────────────── */
+
+bool cbm_ui_host_is_valid(const char *host) {
+    struct in_addr addr;
+    return host && host[0] != '\0' && inet_pton(AF_INET, host, &addr) == 1;
+}
+
+bool cbm_ui_host_is_loopback(const char *host) {
+    struct in_addr addr = {0}; /* zero-init: -Werror=maybe-uninitialized with musl */
+    if (!cbm_ui_host_is_valid(host)) {
+        return false;
+    }
+    return (ntohl(addr.s_addr) & UINT32_C(0xff000000)) == UINT32_C(0x7f000000);
+}
+
 /* ── Path ────────────────────────────────────────────────────── */
 
 void cbm_ui_config_path(char *buf, int bufsz) {
@@ -114,6 +131,7 @@ void cbm_ui_config_load(cbm_ui_config_t *cfg) {
     }
     cfg->ui_enabled = CBM_UI_DEFAULT_ENABLED;
     cfg->ui_port = CBM_UI_DEFAULT_PORT;
+    snprintf(cfg->ui_host, sizeof(cfg->ui_host), "%s", CBM_UI_DEFAULT_HOST);
 
     char path[CBM_SZ_1K];
     cbm_ui_config_path(path, (int)sizeof(path));
@@ -155,6 +173,15 @@ void cbm_ui_config_load(cbm_ui_config_t *cfg) {
         int64_t port = yyjson_get_int(v_port);
         if (port > 0 && port <= 65535) {
             cfg->ui_port = (int)port;
+        }
+    }
+
+    /* Fork patch feat/ui-host: ui_host (IPv4 dotted-quad only). */
+    yyjson_val *v_host = yyjson_obj_get(root, "ui_host");
+    if (yyjson_is_str(v_host)) {
+        const char *host = yyjson_get_str(v_host);
+        if (cbm_ui_host_is_valid(host)) {
+            snprintf(cfg->ui_host, sizeof(cfg->ui_host), "%s", host);
         }
     }
 
@@ -404,7 +431,10 @@ bool cbm_ui_config_save(const cbm_ui_config_t *cfg) {
     if (serialized) {
         yyjson_mut_doc_set_root(doc, root);
         serialized = yyjson_mut_obj_add_bool(doc, root, "ui_enabled", cfg->ui_enabled) &&
-                     yyjson_mut_obj_add_int(doc, root, "ui_port", cfg->ui_port);
+                     yyjson_mut_obj_add_int(doc, root, "ui_port", cfg->ui_port) &&
+                     yyjson_mut_obj_add_str(doc, root, "ui_host",
+                                             cbm_ui_host_is_valid(cfg->ui_host) ? cfg->ui_host
+                                                                               : CBM_UI_DEFAULT_HOST);
     }
 
     size_t json_len = 0;

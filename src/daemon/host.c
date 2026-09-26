@@ -69,7 +69,7 @@ typedef struct host_state host_state_t;
 typedef struct {
     void *context;
     void (*config_load)(void *context, cbm_ui_config_t *config_out);
-    cbm_http_server_t *(*server_new)(void *context, int port);
+    cbm_http_server_t *(*server_new)(void *context, const char *host, int port);
     void (*server_configure)(void *context, cbm_http_server_t *server, host_state_t *host);
     void (*server_stop)(void *context, cbm_http_server_t *server);
     bool (*server_free)(void *context, cbm_http_server_t *server);
@@ -338,9 +338,9 @@ static void host_http_config_load_default(void *context, cbm_ui_config_t *config
     cbm_ui_config_load(config_out);
 }
 
-static cbm_http_server_t *host_http_server_new_default(void *context, int port) {
+static cbm_http_server_t *host_http_server_new_default(void *context, const char *host, int port) {
     (void)context;
-    return cbm_http_server_new(port);
+    return cbm_http_server_new(host, port);
 }
 
 static void host_http_server_configure_default(void *context, cbm_http_server_t *server,
@@ -497,7 +497,7 @@ static void host_http_reconcile_at(host_state_t *host, uint64_t now_ms, bool for
     }
 
     const host_http_ops_t *ops = host->http_ops;
-    host->http = ops->server_new(ops->context, desired.ui_port);
+    host->http = ops->server_new(ops->context, desired.ui_host, desired.ui_port);
     if (!host->http) {
         host_http_schedule_retry(host, now_ms, "server_create");
         return;
@@ -667,7 +667,8 @@ static void host_http_test_config_load(void *opaque, cbm_ui_config_t *config_out
     config_out->ui_port = change_port ? CBM_UI_DEFAULT_PORT + 1 : CBM_UI_DEFAULT_PORT;
 }
 
-static cbm_http_server_t *host_http_test_server_new(void *opaque, int port) {
+static cbm_http_server_t *host_http_test_server_new(void *opaque, const char *host, int port) {
+    (void)host;
     (void)port;
     host_http_reconcile_test_context_t *context = opaque;
     context->server_create_attempts++;
@@ -840,7 +841,7 @@ static int host_http_thread_create_failure_for_test(
 }
 
 bool cbm_daemon_host_http_thread_create_failure_lifecycle_for_test(void) {
-    cbm_http_server_t *server = cbm_http_server_new(0);
+    cbm_http_server_t *server = cbm_http_server_new(NULL, 0);
     if (!server)
         return false;
     host_http_thread_create_failure_test_t test = {

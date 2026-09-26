@@ -1,0 +1,46 @@
+name: Build fork (linux arm64)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/ui-host]
+
+permissions:
+  contents: read
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      # L'UI se construit sur le runner (node natif ARM64).
+      - name: Build graph UI assets (runner)
+        working-directory: graph-ui
+        run: |
+          npm ci
+          npm run build
+
+      # Recette TESTÉE LOCALEMENT (docker alpine:3.20, build complet + link
+      # réussis) puis vérifiée sur debian:bookworm-slim (GLIBC 2.36 = notre
+      # conteneur) : --version et config set/get ui_host OK.
+      - name: Build cbm static (alpine/musl via docker run)
+        run: |
+          docker run --rm -v "$PWD":/w -w /w alpine:3.20 sh -c \
+            'apk add --no-cache build-base musl-dev zlib-dev zlib-static linux-headers bash make && \
+             CC=gcc CXX=g++ make -f Makefile.cbm cbm-with-ui STATIC=1 -o frontend'
+          mkdir -p dist
+          cp build/c/codebase-memory-mcp dist/codebase-memory-mcp-linux-arm64-portable
+          sha256sum dist/codebase-memory-mcp-linux-arm64-portable > dist/checksums.txt
+
+      - name: Smoke test (sur le runner — statique, aucune dépendance)
+        run: |
+          ./dist/codebase-memory-mcp-linux-arm64-portable --version
+          CBM_CACHE_DIR=/tmp/cbm-smoke ./dist/codebase-memory-mcp-linux-arm64-portable config set ui_host 0.0.0.0
+          CBM_CACHE_DIR=/tmp/cbm-smoke ./dist/codebase-memory-mcp-linux-arm64-portable config get ui_host
+          file dist/codebase-memory-mcp-linux-arm64-portable | rg -i 'static' || { echo "ERREUR: binaire non statique"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cbm-linux-arm64-fork
+          path: dist/

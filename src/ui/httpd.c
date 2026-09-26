@@ -6,6 +6,7 @@
  * single-threaded, localhost-only, strict CRLF, Connection: close).
  */
 #include "ui/httpd.h"
+#include "ui/config.h" /* fork patch feat/ui-host: CBM_UI_HOST_MAX */
 #include "foundation/compat_thread.h"
 
 #include <ctype.h>
@@ -58,6 +59,7 @@ typedef int cbm_sock_t;
 struct cbm_httpd {
     cbm_sock_t fd;
     int port;
+    char host[CBM_UI_HOST_MAX]; /* fork patch feat/ui-host: bound address */
     int recv_deadline_ms;
     cbm_mutex_t active_mutex;
     struct cbm_http_conn *active;
@@ -216,7 +218,7 @@ static int send_all(cbm_http_conn_t *connection, const void *data, size_t len, i
 
 /* ── Listener ─────────────────────────────────────────────────── */
 
-cbm_httpd_t *cbm_httpd_listen(int port) {
+cbm_httpd_t *cbm_httpd_listen(const char *host, int port) {
 #ifdef _WIN32
     static atomic_int wsa_started = 0;
     int expected = 0;
@@ -240,12 +242,17 @@ cbm_httpd_t *cbm_httpd_listen(int port) {
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 #endif
 
-    /* Loopback only — never any other interface. */
+    /* Fork patch feat/ui-host: bind to the configured IPv4 address. The
+     * caller validates host for CLI/config use; validate again at the
+     * transport boundary so this API cannot accidentally bind a hostname. */
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons((unsigned short)port);
-    addr.sin_addr.s_addr = htonl(0x7F000001); /* 127.0.0.1 */
+    if (!host || inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
+        cbm_sock_close(fd);
+        return NULL;
+    }
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 || listen(fd, 16) != 0 ||
         !socket_set_nonblocking(fd)) {
@@ -268,6 +275,7 @@ cbm_httpd_t *cbm_httpd_listen(int port) {
     }
     d->fd = fd;
     d->port = (int)ntohs(bound.sin_port);
+    snprintf(d->host, sizeof(d->host), "%s", host ? host : "127.0.0.1");
     d->recv_deadline_ms = CBM_HTTP_RECV_DEADLINE_MS;
     cbm_mutex_init(&d->active_mutex);
     return d;
@@ -275,6 +283,11 @@ cbm_httpd_t *cbm_httpd_listen(int port) {
 
 int cbm_httpd_port(const cbm_httpd_t *d) {
     return d ? d->port : -1;
+}
+
+/* Fork patch feat/ui-host: the actually-bound address (dotted quad). */
+const char *cbm_httpd_host(const cbm_httpd_t *d) {
+    return d ? d->host : NULL;
 }
 
 void cbm_httpd_set_recv_deadline_ms(cbm_httpd_t *d, int ms) {

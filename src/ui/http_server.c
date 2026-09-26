@@ -14,6 +14,7 @@
  * Has its own cbm_mcp_server_t with a separate SQLite connection (WAL reader).
  */
 #include "ui/http_server.h"
+#include "ui/config.h" /* fork patch feat/ui-host: CBM_UI_DEFAULT_HOST + validation */
 #include "ui/httpd.h"
 #include "ui/embedded_assets.h"
 #include "ui/layout3d.h"
@@ -85,29 +86,42 @@
 static char g_cors[256];      /* CORS headers only */
 static char g_cors_json[512]; /* CORS + Content-Type: application/json */
 
-static bool origin_is_same_server(const char *origin, int port) {
+static bool origin_is_same_server(const char *origin, const char *bound_host, int port) {
     char expected[128];
     int length = snprintf(expected, sizeof(expected), "http://127.0.0.1:%d", port);
     if (length > 0 && (size_t)length < sizeof(expected) && strcmp(origin, expected) == 0)
         return true;
     length = snprintf(expected, sizeof(expected), "http://localhost:%d", port);
-    return length > 0 && (size_t)length < sizeof(expected) && strcmp(origin, expected) == 0;
+    if (length > 0 && (size_t)length < sizeof(expected) && strcmp(origin, expected) == 0)
+        return true;
+    /* Fork patch feat/ui-host: non-loopback bind accepts its own address. */
+    if (!cbm_ui_host_is_loopback(bound_host)) {
+        length = snprintf(expected, sizeof(expected), "http://%s:%d", bound_host, port);
+        return length > 0 && (size_t)length < sizeof(expected) && strcmp(origin, expected) == 0;
+    }
+    return false;
 }
 
 static bool origin_matches_host(const char *origin, const char *host, int port) {
-    /* Two literal loopback forms only — spelled out so the static URL audit
-     * sees the complete URL each branch can produce. */
+    /* The origin must name the same host as the Host header (any IPv4 form
+     * on a non-loopback bind — fork patch feat/ui-host). */
+    size_t hlen = strlen(host);
+    if (strncmp(origin, "http://", 7) != 0) {
+        return false;
+    }
+    const char *origin_host = origin + 7;
+    if (strncmp(origin_host, host, hlen) != 0) {
+        return false;
+    }
     char expected[128];
-    int length = strncmp(host, "localhost", 9) == 0
-                     ? snprintf(expected, sizeof(expected), "http://localhost:%d", port)
-                     : snprintf(expected, sizeof(expected), "http://127.0.0.1:%d", port);
+    int length = snprintf(expected, sizeof(expected), "http://%s:%d", host, port);
     return length > 0 && (size_t)length < sizeof(expected) && strcmp(origin, expected) == 0;
 }
 
 /* Foreign origins are rejected before this runs. Reflect only the exact
  * same-server origin; a different localhost port is a different principal. */
-static void update_cors(const cbm_http_req_t *req, int port) {
-    if (req->origin[0] != '\0' && origin_is_same_server(req->origin, port)) {
+static void update_cors(const cbm_http_req_t *req, const char *bound_host, int port) {
+    if (req->origin[0] != '\0' && origin_is_same_server(req->origin, bound_host, port)) {
         snprintf(g_cors, sizeof(g_cors),
                  "Access-Control-Allow-Origin: %s\r\n"
                  "Access-Control-Allow-Methods: POST, GET, DELETE, OPTIONS\r\n"
@@ -192,6 +206,7 @@ struct cbm_http_server {
     atomic_int stop_flag;
     atomic_int run_state;
     int port;
+    char host[CBM_UI_HOST_MAX]; /* fork patch feat/ui-host: bound address */
     bool listener_ok;
     uint8_t readiness_secret[CBM_SHA256_DIGEST_LEN];
     bool readiness_secret_set;
@@ -1814,13 +1829,32 @@ static void handle_rpc(cbm_http_conn_t *c, const cbm_http_req_t *req, cbm_mcp_se
  * name that is not loopback — a rebinding DNS host or a proxy pointed at the
  * local port — which is the DNS-rebinding / cross-site vector against a
  * localhost-only service. */
-static bool host_is_this_server(const char *host, int port) {
+/* Fork patch feat/ui-host: origin/host checks are parameterized by the bound
+ * address. Loopback binds keep the upstream exact-match rules verbatim; a
+ * non-loopback bind (trusted LAN behind firewall/VLAN segmentation) accepts
+ * the bound address and localhost forms on the same port. */
+
+static bool host_is_loopback_form(const char *host, int port) {
     char expected[128];
     int length = snprintf(expected, sizeof(expected), "127.0.0.1:%d", port);
     if (length > 0 && (size_t)length < sizeof(expected) && strcmp(host, expected) == 0)
         return true;
     length = snprintf(expected, sizeof(expected), "localhost:%d", port);
     return length > 0 && (size_t)length < sizeof(expected) && strcmp(host, expected) == 0;
+}
+
+static bool host_is_this_server(const char *host, const char *bound_host, int port) {
+    if (host_is_loopback_form(host, port))
+        return true;
+    /* Non-loopback bind: accept the bound address (with or without :port). */
+    if (!cbm_ui_host_is_loopback(bound_host)) {
+        char expected[128];
+        int length = snprintf(expected, sizeof(expected), "%s:%d", bound_host, port);
+        if (length > 0 && (size_t)length < sizeof(expected) && strcmp(host, expected) == 0)
+            return true;
+        return strcmp(host, bound_host) == 0;
+    }
+    return false;
 }
 
 static bool route_is_protected(const char *path) {
@@ -1919,17 +1953,17 @@ static bool request_passes_http_security(cbm_http_server_t *srv, cbm_http_conn_t
         cbm_http_replyf(c, 400, "", "%s", "{\"error\":\"Host header required\"}");
         return false;
     }
-    if (req->host[0] != '\0' && !host_is_this_server(req->host, srv->port)) {
+    if (req->host[0] != '\0' && !host_is_this_server(req->host, srv->host, srv->port)) {
         cbm_http_replyf(c, 403, "", "%s", "{\"error\":\"forbidden host\"}");
         return false;
     }
     if (req->origin[0] != '\0' &&
-        (req->host[0] == '\0' || !origin_is_same_server(req->origin, srv->port) ||
+        (req->host[0] == '\0' || !origin_is_same_server(req->origin, srv->host, srv->port) ||
          !origin_matches_host(req->origin, req->host, srv->port))) {
         cbm_http_replyf(c, 403, "", "%s", "{\"error\":\"forbidden origin\"}");
         return false;
     }
-    update_cors(req, srv->port);
+    update_cors(req, srv->host, srv->port);
     bool is_post = strcmp(req->method, "POST") == 0;
     if (route_is_protected(req->path) && is_post && !content_type_is_json(req->content_type)) {
         cbm_http_replyf(c, 415, g_cors_json, "%s", "{\"error\":\"application/json required\"}");
@@ -2073,11 +2107,20 @@ static char *http_read_only_index_rejected(void *context, const char *repo_path,
                                true);
 }
 
-cbm_http_server_t *cbm_http_server_new(int port) {
+cbm_http_server_t *cbm_http_server_new(const char *host, int port) {
     cbm_http_server_t *srv = calloc(1, sizeof(*srv));
     if (!srv)
         return NULL;
 
+    /* Fork patch feat/ui-host: configurable bind host (IPv4 dotted-quad). */
+    if (!host || host[0] == '\0') {
+        host = CBM_UI_DEFAULT_HOST;
+    }
+    if (!cbm_ui_host_is_valid(host)) {
+        free(srv);
+        return NULL;
+    }
+    snprintf(srv->host, sizeof(srv->host), "%s", host);
     srv->port = port;
     atomic_init(&srv->stop_flag, 0);
     atomic_init(&srv->run_state, HTTP_RUN_IDLE);
@@ -2092,8 +2135,8 @@ cbm_http_server_t *cbm_http_server_new(int port) {
     cbm_mcp_server_set_background_tasks(srv->mcp, false);
     cbm_mcp_server_set_index_executor(srv->mcp, http_read_only_index_rejected, srv);
 
-    /* Bind to localhost only (httpd refuses anything else by construction) */
-    srv->listener = cbm_httpd_listen(port);
+    /* Fork patch feat/ui-host: bind to the configured address. */
+    srv->listener = cbm_httpd_listen(srv->host, port);
     if (!srv->listener) {
         char port_str[16];
         snprintf(port_str, sizeof(port_str), "%d", port);
@@ -2105,12 +2148,22 @@ cbm_http_server_t *cbm_http_server_new(int port) {
     }
 
     srv->port = cbm_httpd_port(srv->listener);
+    snprintf(srv->host, sizeof(srv->host), "%s", cbm_httpd_host(srv->listener));
     srv->listener_ok = true;
+
+    if (!cbm_ui_host_is_loopback(srv->host)) {
+        fprintf(stderr,
+                "\nWARNING: Graph UI is listening on %s:%d%s.\n"
+                "The UI has no authentication and is reachable over the network.\n"
+                "Restrict access with a firewall or trusted network (VLAN).\n\n",
+                srv->host, srv->port, strcmp(srv->host, "0.0.0.0") == 0 ? " (all interfaces)" : "");
+        fflush(stderr);
+    }
 
     char port_str[16];
     snprintf(port_str, sizeof(port_str), "%d", srv->port);
-    char url[64];
-    snprintf(url, sizeof(url), "http://127.0.0.1:%d", srv->port);
+    char url[96];
+    snprintf(url, sizeof(url), "http://%s:%d", srv->host, srv->port);
     cbm_log_info("ui.serving", "url", url, "port", port_str);
 
     return srv;
@@ -2216,6 +2269,11 @@ bool cbm_http_server_is_running(const cbm_http_server_t *srv) {
 
 int cbm_http_server_port(const cbm_http_server_t *srv) {
     return (srv && srv->listener_ok) ? srv->port : -1;
+}
+
+/* Fork patch feat/ui-host: the bound address. */
+const char *cbm_http_server_host(const cbm_http_server_t *srv) {
+    return (srv && srv->listener_ok) ? srv->host : NULL;
 }
 
 void cbm_http_server_set_recv_deadline_ms(cbm_http_server_t *srv, int ms) {
